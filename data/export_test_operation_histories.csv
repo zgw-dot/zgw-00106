@@ -1,0 +1,17 @@
+﻿id,request_id,batch_id,operation,operator,operated_at,detail
+16,3,,revert,supervisor,2026-06-07 20:07:29,撤销更正：原因：数据录入错误，需求变更。状态变更为 reverted，库存已恢复。
+15,4,,partial_return,warehouse_keeper,2026-06-07 20:07:13,部分归还：矿泉水 x10，累计归还 10/10，状态变更为 full_settled
+13,4,,approve,supervisor,2026-06-07 20:06:39,审批通过：矿泉水 x10，锁定库存。分配批次：批次1x10
+14,4,,outbound,warehouse_keeper,2026-06-07 20:06:39,出库完成：矿泉水 x10
+12,4,,create_request,applicant,2026-06-07 20:06:38,Created request R004: 矿泉水 x10 for 安置点4
+10,3,,create_request,applicant,2026-06-07 20:06:02,Created request R003: 矿泉水 x60 for 安置点3
+11,3,,approve,supervisor,2026-06-07 20:06:02,审批通过：矿泉水 x60，锁定库存。分配批次：批次1x60
+8,2,,create_request,applicant,2026-06-07 20:06:01,Created request R002: 帐篷 x20 for 安置点2
+9,2,,inventory_warning,applicant,2026-06-07 20:06:01,申请创建时库存预警：帐篷 x20，当前可用仅 0，审批时可能因库存不足被拒绝。
+7,1,,full_settle,warehouse_keeper,2026-06-07 20:03:10,全部核销：矿泉水 x30，已归还 30，核销 0。
+6,1,,partial_return,warehouse_keeper,2026-06-07 20:01:34,部分归还：矿泉水 x10，累计归还 10/30，状态变更为 partial_return
+5,1,,outbound,warehouse_keeper,2026-06-07 20:00:35,出库完成：矿泉水 x30
+4,1,,approve,supervisor,2026-06-07 19:59:37,审批通过：矿泉水 x30，锁定库存。分配批次：批次1x30
+3,1,,create_request,applicant,2026-06-07 19:54:48,Created request R2025001: 矿泉水 x30 for 安置点1
+1,,1,create_batch,warehouse_keeper,2026-06-07 19:54:35,"Created batch B2025001: 矿泉水 x100, expiry 2026-12-31, location A仓库"
+2,,2,create_batch,warehouse_keeper,2026-06-07 19:54:35,"Created batch B2025002: 矿泉水 x50, expiry 2020-01-01, location B仓库"
