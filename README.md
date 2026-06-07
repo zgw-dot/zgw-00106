@@ -255,6 +255,77 @@ python cli.py revert --request-id 1 --reason "数据录入错误，需重新处�
 # [成功] 已撤销更正
 ```
 
+## 回归验证：撤销更正库存账
+
+### 问题场景
+申请出库后如果先部分归还，再执行撤销更正，原实现会把已经归还过的数量又恢复一次，导致批次库存超过初始数量。
+
+**复现步骤：**
+```bash
+# 1. 创建 10 件批次
+python cli.py cb --batch-no B001 --material 测试物资 --quantity 10 --expiry 2026-12-31 --location 仓库 --operator warehouse_keeper
+
+# 2. 创建两个 6 件申请
+python cli.py cr --request-no R001 --material 测试物资 --quantity 6 --location 安置点A --operator applicant
+python cli.py cr --request-no R002 --material 测试物资 --quantity 6 --location 安置点B --operator applicant
+
+# 3. 审批第一个（成功），第二个因库存不足失败
+python cli.py approve --request-id 1 --operator supervisor  # 成功，锁定 6 件
+python cli.py approve --request-id 2 --operator supervisor  # [库存错误] 库存不足
+
+# 4. 出库第一个申请
+python cli.py outbound --request-id 1 --operator warehouse_keeper  # 库存变为 4 件
+
+# 5. 部分归还 2 件
+python cli.py return --request-id 1 --quantity 2 --operator warehouse_keeper  # 库存变为 6 件
+
+# 6. 撤销更正（带原因）
+python cli.py revert --request-id 1 --reason "需求变更，需重新处理" --operator supervisor
+```
+
+**结果验证：**
+```bash
+# 查询库存 - 正确应为 10 件，不能是 12 件
+python cli.py lb --material 测试物资
+#   ID 批次号    物资      总数量  锁定  可用 ...
+#    1 B001    测试物资     10     0    10 ...
+
+# 验证逻辑：10 - 6(出库) + 2(归还) + 4(撤销恢复净出库) = 10 ✓
+# 错误逻辑：10 - 6(出库) + 2(归还) + 6(撤销恢复全部出库) = 12 ✗
+
+# 操作历史保留撤销原因
+python cli.py operation-history --request-id 1
+# ... revert  supervisor ... 撤销更正：原因：需求变更，需重新处理...
+
+# 第二个申请现在可以审批了（库存恢复为 10 件）
+python cli.py approve --request-id 2 --operator supervisor  # 成功
+```
+
+**导出一致性验证：**
+```bash
+# 导出 JSON
+python cli.py export --output ./test_export.json --format json
+
+# 验证导出数据与查询一致
+python -c "
+import json
+with open('test_export.json') as f:
+    data = json.load(f)
+batch = [b for b in data['material_batches'] if b['batch_no'] == 'B001'][0]
+req = [r for r in data['allocation_requests'] if r['request_no'] == 'R001'][0]
+assert batch['quantity'] == 10, '批次数量应为 10'
+assert batch['locked_quantity'] == 0, '锁定数量应为 0'
+assert req['status'] == 'reverted', '状态应为 reverted'
+assert req['returned_quantity'] == 2, '已归还数量应为 2'
+print('导出数据与查询一致 ✓')
+"
+```
+
+运行完整回归测试：
+```bash
+python test_revert_fix.py
+```
+
 ## 项目结构
 
 ```
@@ -330,3 +401,4 @@ python cli.py revert --request-id 1 --reason "数据录入错误，需重新处�
 2. **幂等导入**：使用 `INSERT OR IGNORE`，同一批次/申请号不会重复导入
 3. **事务原子性**：所有涉及多表更新的操作（审批、出库、归还等）均在事务内执行，失败自动回滚
 4. **历史不可篡改**：所有操作均追加记录，不更新或删除历史日志
+5. **撤销更正库存正确性**：撤销时仅恢复**净出库量**（申请总数量 - 已归还数量），避免重复加回已归还部分；仅 `APPROVED` 状态才解锁锁定库存（出库后 `locked_quantity` 已通过出库操作扣减）

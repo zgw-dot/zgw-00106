@@ -1,8 +1,0 @@
-﻿id,batch_id,request_id,change_type,quantity_change,operator,operated_at,remark
-7,1,4,return,10,warehouse_keeper,2026-06-07 20:07:13,归还：申请单 R004 归还 10
-5,1,4,lock,0,supervisor,2026-06-07 20:06:39,审批锁定：申请单 R004 锁定 10
-6,1,4,outbound,-10,warehouse_keeper,2026-06-07 20:06:39,出库：申请单 R004 出库 10
-4,1,3,lock,0,supervisor,2026-06-07 20:06:02,审批锁定：申请单 R003 锁定 60
-3,1,1,return,10,warehouse_keeper,2026-06-07 20:01:34,归还：申请单 R2025001 归还 10
-2,1,1,outbound,-30,warehouse_keeper,2026-06-07 20:00:35,出库：申请单 R2025001 出库 30
-1,1,1,lock,0,supervisor,2026-06-07 19:59:37,审批锁定：申请单 R2025001 锁定 30

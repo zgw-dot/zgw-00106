@@ -590,13 +590,38 @@ class BusinessRules:
 
         logs = self.db.list_inventory_logs(request_id=request_id)
 
+        net_outbound = request.quantity - request.returned_quantity
+
         restore_data = []
         unlock_data = []
-        for log in logs:
-            if log.change_type == "outbound":
-                restore_qty = abs(log.quantity_change)
-                restore_data.append((log.batch_id, restore_qty))
-            elif log.change_type == "lock":
+
+        if net_outbound > 0:
+            outbound_logs = [l for l in logs if l.change_type == "outbound"]
+            return_logs = [l for l in logs if l.change_type == "return"]
+
+            batch_outbound = {}
+            for log in outbound_logs:
+                batch_id = log.batch_id
+                batch_outbound[batch_id] = batch_outbound.get(batch_id, 0) + abs(log.quantity_change)
+
+            batch_returned = {}
+            for log in return_logs:
+                batch_id = log.batch_id
+                batch_returned[batch_id] = batch_returned.get(batch_id, 0) + log.quantity_change
+
+            remaining_restore = net_outbound
+            for batch_id, total_out in sorted(batch_outbound.items()):
+                if remaining_restore <= 0:
+                    break
+                batch_net = total_out - batch_returned.get(batch_id, 0)
+                if batch_net > 0:
+                    restore_qty = min(batch_net, remaining_restore)
+                    restore_data.append((batch_id, restore_qty))
+                    remaining_restore -= restore_qty
+
+        if request.status == STATUS["APPROVED"]:
+            lock_logs = [l for l in logs if l.change_type == "lock"]
+            for log in lock_logs:
                 batch = self.db.get_batch(log.batch_id)
                 if batch and batch.locked_quantity > 0:
                     unlock_qty = min(batch.locked_quantity, request.quantity)

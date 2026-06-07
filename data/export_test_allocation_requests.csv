@@ -1,5 +1,0 @@
-﻿id,request_no,material_name,quantity,location,applicant,status,created_at,approved_at,approved_by,outbound_at,outbound_by,returned_quantity,cancelled_at,cancelled_by,revert_reason,reverted_at,reverted_by
-4,R004,矿泉水,10,安置点4,applicant,full_settled,2026-06-07 20:06:38,2026-06-07 20:06:39,supervisor,2026-06-07 20:06:39,warehouse_keeper,10,,,,,
-3,R003,矿泉水,60,安置点3,applicant,reverted,2026-06-07 20:06:02,2026-06-07 20:06:02,supervisor,,,0,,,数据录入错误，需求变更,2026-06-07 20:07:29,supervisor
-2,R002,帐篷,20,安置点2,applicant,pending,2026-06-07 20:06:01,,,,,0,,,,,
-1,R2025001,矿泉水,30,安置点1,applicant,full_settled,2026-06-07 19:54:48,2026-06-07 19:59:37,supervisor,2026-06-07 20:00:35,warehouse_keeper,30,,,,,

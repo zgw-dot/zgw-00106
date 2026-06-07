@@ -1,3 +1,0 @@
-﻿id,batch_no,material_name,quantity,locked_quantity,expiry_date,location,created_by,created_at,is_active
-1,B2025001,矿泉水,80,0,2026-12-31,A仓库,warehouse_keeper,2026-06-07 19:54:35,1
-2,B2025002,矿泉水,50,0,2020-01-01,B仓库,warehouse_keeper,2026-06-07 19:54:35,1
