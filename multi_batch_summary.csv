@@ -1,0 +1,18 @@
+﻿项目,数值
+total_materials,1
+total_batches,2
+total_requests,1
+total_quantity,10
+total_locked,8
+total_available,2
+total_logs,2
+total_operations,4
+total_anomalies,0
+critical_anomalies,0
+warning_anomalies,0
+snapshot_at,2026-06-07 21:45:39
+operator,supervisor
+operator_role,supervisor
+filter_material,
+filter_start_time,
+filter_end_time,

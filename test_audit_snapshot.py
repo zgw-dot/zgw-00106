@@ -636,6 +636,119 @@ def test_time_range_filter():
     print("[PASS] 测试8通过：时间范围筛选正常")
 
 
+def test_multi_batch_approval():
+    """测试9：两批次满足一张申请的跨批次审批回归测试"""
+    import time
+    import json
+    print("\n" + "=" * 70)
+    print("测试9：跨批次审批回归测试（两批次满足一张申请）")
+    print("=" * 70)
+
+    cwd = os.getcwd()
+    cleanup(cwd)
+
+    rc, out, err = run_cli([
+        "create-batch", "--batch-no", "B-MULTI-001",
+        "--material", "跨批次物资", "--quantity", "5",
+        "--expiry", "2026-12-31", "--location", "A仓",
+        "--operator", "warehouse_keeper"
+    ], cwd=cwd)
+    assert_equal(rc, 0, "创建批次1成功")
+
+    rc, out, err = run_cli([
+        "create-batch", "--batch-no", "B-MULTI-002",
+        "--material", "跨批次物资", "--quantity", "5",
+        "--expiry", "2026-12-31", "--location", "B仓",
+        "--operator", "warehouse_keeper"
+    ], cwd=cwd)
+    assert_equal(rc, 0, "创建批次2成功")
+
+    rc, out, err = run_cli([
+        "create-request", "--request-no", "R-MULTI-001",
+        "--material", "跨批次物资", "--quantity", "8",
+        "--location", "安置点1", "--operator", "applicant"
+    ], cwd=cwd)
+    assert_equal(rc, 0, "创建申请成功")
+
+    rc, out, err = run_cli([
+        "approve", "--request-id", "1",
+        "--operator", "supervisor"
+    ], cwd=cwd)
+    assert_equal(rc, 0, "审批成功（跨批次锁定 5+3）")
+
+    time.sleep(0.5)
+
+    rc, out, err = run_cli([
+        "audit-snapshot", "--operator", "supervisor"
+    ], cwd=cwd)
+    assert_equal(rc, 0, "摘要审计无异常")
+    assert_in("审计完成，无异常", out, "摘要显示无异常")
+    assert_in("跨批次物资", out, "摘要包含跨批次物资")
+    assert_in("库存日志：2 条", out, "摘要显示2条日志")
+
+    time.sleep(0.5)
+
+    rc, out, err = run_cli([
+        "audit-snapshot", "--operator", "supervisor",
+        "--show-details"
+    ], cwd=cwd)
+    assert_equal(rc, 0, "详情审计无异常")
+    assert_in("B-MULTI-001", out, "详情包含批次1")
+    assert_in("B-MULTI-002", out, "详情包含批次2")
+    assert_in("R-MULTI-001", out, "详情包含申请")
+    assert_in("approved", out, "详情显示申请状态")
+    assert_in("日志数", out, "详情显示日志数")
+
+    time.sleep(0.5)
+
+    json_path = os.path.join(cwd, "multi_batch_before.json")
+    rc, out, err = run_cli([
+        "audit-snapshot", "--operator", "supervisor",
+        "--format", "json", "--output", json_path
+    ], cwd=cwd)
+    assert_equal(rc, 0, "导出JSON无异常")
+
+    with open(json_path, "r", encoding="utf-8") as f:
+        data_before = json.load(f)
+    mats_before = [m for m in data_before["materials"] if m["material_name"] == "跨批次物资"][0]
+    assert_equal(len(mats_before["batches"]), 2, "JSON包含2个批次")
+    assert_equal(len(mats_before["requests"]), 1, "JSON包含1个申请")
+    assert_equal(mats_before["requests"][0]["status"], "approved", "申请状态为approved")
+    assert_equal(mats_before["requests"][0]["log_count"], 2, "申请日志数为2")
+    assert_equal(len(data_before["anomalies"]), 0, "JSON无异常")
+
+    batches_before = {b["batch_no"]: b for b in mats_before["batches"]}
+    assert_equal(batches_before["B-MULTI-001"]["locked_quantity"], 5, "批次1锁定5件")
+    assert_equal(batches_before["B-MULTI-002"]["locked_quantity"], 3, "批次2锁定3件")
+
+    csv_path = os.path.join(cwd, "multi_batch")
+    rc, out, err = run_cli([
+        "audit-snapshot", "--operator", "supervisor",
+        "--format", "csv", "--output", csv_path
+    ], cwd=cwd)
+    assert_equal(rc, 0, "导出CSV无异常")
+
+    time.sleep(0.5)
+
+    json_path_after = os.path.join(cwd, "multi_batch_after.json")
+    rc, out, err = run_cli([
+        "audit-snapshot", "--operator", "supervisor",
+        "--format", "json", "--output", json_path_after
+    ], cwd=cwd)
+    assert_equal(rc, 0, "重启后导出JSON无异常")
+
+    with open(json_path_after, "r", encoding="utf-8") as f:
+        data_after = json.load(f)
+
+    data_before.pop("snapshot_at")
+    data_after.pop("snapshot_at")
+    assert_equal(data_before, data_after, "跨重启后数据一致")
+
+    time.sleep(0.5)
+    cleanup(cwd)
+    print("[PASS] 测试9通过：跨批次审批无异常误报，跨重启数据一致")
+
+
 def main():
     print("=" * 70)
     print("库存审计快照功能验证测试")
@@ -650,6 +763,7 @@ def main():
         test_import_conflict_audit()
         test_permission_control()
         test_time_range_filter()
+        test_multi_batch_approval()
 
         print("\n" + "=" * 70)
         print("🎉 所有审计快照测试通过！")
@@ -657,10 +771,11 @@ def main():
         print()
         print("验证总结：")
         print("  1. [PASS] 基础功能：摘要打印、物资筛选、时间范围筛选正常")
-        print("  2. [PASS] 异常检测：负库存、锁定超限、状态日志不一致、导入冲突均能检测")
+        print("  2. [PASS] 异常检测：负库存、锁定超限、导入冲突均能检测")
         print("  3. [PASS] 导出验证：JSON/CSV 字段稳定，跨重启数据一致")
         print("  4. [PASS] 权限控制：申请人脱敏，越权操作失败")
-        print("  5. [PASS] 退出码：有异常时返回非零退出码 5")
+        print("  5. [PASS] 跨批次审批：两批次满足一张申请无误报")
+        print("  6. [PASS] 退出码：有异常时返回非零退出码 5")
 
     except Exception as e:
         print(f"\n[FAIL] 测试失败: {e}")

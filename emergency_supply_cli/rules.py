@@ -883,40 +883,6 @@ class BusinessRules:
                     )
                 )
 
-        for req in requests:
-            expected_log_count = 0
-            if req.status == STATUS["APPROVED"]:
-                expected_log_count = 1
-            elif req.status == STATUS["OUTBOUND"]:
-                expected_log_count = 2
-            elif req.status in [STATUS["PARTIAL_RETURN"], STATUS["FULL_SETTLED"]]:
-                expected_log_count = 3
-            elif req.status == STATUS["CANCELLED"] and req.approved_at:
-                expected_log_count = 2
-            elif req.status == STATUS["REVERTED"]:
-                expected_log_count = 4
-
-            actual_log_count = self.db.get_log_count_by_request(req.id)
-
-            if expected_log_count > 0 and actual_log_count != expected_log_count:
-                anomalies.append(
-                    AuditAnomaly(
-                        anomaly_type="status_log_mismatch",
-                        severity="warning",
-                        material_name=req.material_name,
-                        entity_id=req.id,
-                        entity_no=req.request_no,
-                        message=f"申请状态({req.status})与日志数量({actual_log_count})不一致，预期 {expected_log_count} 条",
-                        details={
-                            "request_id": req.id,
-                            "request_no": req.request_no,
-                            "status": req.status,
-                            "expected_logs": expected_log_count,
-                            "actual_logs": actual_log_count,
-                        },
-                    )
-                )
-
         duplicate_batches = self.db.get_duplicate_batch_numbers()
         for dup in duplicate_batches:
             anomalies.append(

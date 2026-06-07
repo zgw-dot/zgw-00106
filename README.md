@@ -456,15 +456,23 @@ python test_revert_fix.py
 python test_audit_snapshot.py
 ```
 
+### Windows 环境前置说明
+```powershell
+# Windows PowerShell 请先设置编码，避免中文/特殊字符乱码
+$env:PYTHONIOENCODING="utf-8"
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+```
+
 ### 手动验证步骤
 
 #### 1. 跨重启后快照一致性
-```bash
+```powershell
+# Windows PowerShell 环境
+$env:PYTHONIOENCODING="utf-8"
+
 # 第一步：创建测试数据并导出快照
-python cli.py cb --batch-no B-AUDIT-001 --material 审计物资 --quantity 100 \
-  --expiry 2026-12-31 --location 审计仓 --operator warehouse_keeper
-python cli.py cr --request-no R-AUDIT-001 --material 审计物资 --quantity 30 \
-  --location 安置点 --operator applicant
+python cli.py cb --batch-no B-AUDIT-001 --material 审计物资 --quantity 100 --expiry 2026-12-31 --location 审计仓 --operator warehouse_keeper
+python cli.py cr --request-no R-AUDIT-001 --material 审计物资 --quantity 30 --location 安置点 --operator applicant
 python cli.py approve --request-id 1 --operator supervisor
 python cli.py as --operator supervisor --format json --output ./audit_before.json
 
@@ -472,105 +480,82 @@ python cli.py as --operator supervisor --format json --output ./audit_before.jso
 python cli.py as --operator supervisor --format json --output ./audit_after.json
 
 # 第三步：比较数据一致性（排除快照时间字段）
-python -c "
-import json
-with open('audit_before.json') as f: d1 = json.load(f)
-with open('audit_after.json') as f: d2 = json.load(f)
-d1.pop('snapshot_at'); d2.pop('snapshot_at')
-assert d1 == d2, '跨重启快照不一致'
-print('✓ 跨重启后快照数据一致')
-"
+# 建议将验证脚本保存为 .py 文件运行，避免 PowerShell 转义问题
+python -c "import json; d1=json.load(open('audit_before.json', encoding='utf-8')); d2=json.load(open('audit_after.json', encoding='utf-8')); d1.pop('snapshot_at'); d2.pop('snapshot_at'); assert d1==d2, '跨重启快照不一致'; print('[OK] 跨重启后快照数据一致')"
 ```
 
 #### 2. JSON/CSV 字段稳定性验证
-```bash
+```powershell
+$env:PYTHONIOENCODING="utf-8"
+
 # 导出 JSON 并验证字段
 python cli.py as --operator supervisor --format json --output ./audit_test.json
-python -c "
-import json
-with open('audit_test.json') as f: d = json.load(f)
-required_top = ['snapshot_at','operator','operator_role','filters','summary','materials','anomalies']
-required_summary = ['total_materials','total_batches','total_requests','total_quantity','total_locked','total_available','total_logs','total_operations','total_anomalies','critical_anomalies','warning_anomalies']
-assert all(k in d for k in required_top), '顶层字段缺失'
-assert all(k in d['summary'] for k in required_summary), '汇总字段缺失'
-print('✓ JSON 字段结构完整')
-"
+python -c "import json; d=json.load(open('audit_test.json', encoding='utf-8')); t=['snapshot_at','operator','operator_role','filters','summary','materials','anomalies']; s=['total_materials','total_batches','total_requests','total_quantity','total_locked','total_available','total_logs','total_operations','total_anomalies','critical_anomalies','warning_anomalies']; assert all(k in d for k in t), '顶层字段缺失'; assert all(k in d['summary'] for k in s), '汇总字段缺失'; print('[OK] JSON 字段结构完整')"
 
 # 导出 CSV 并验证字段
 python cli.py as --operator supervisor --format csv --output ./audit_test
-python -c "
-import csv
-with open('audit_test_materials.csv') as f:
-    reader = csv.DictReader(f)
-    cols = reader.fieldnames
-required = ['material_name','total_quantity','total_locked','total_available','batch_count','request_count','log_count','operation_count']
-assert all(c in cols for c in required), 'CSV字段缺失'
-print('✓ CSV 字段结构完整')
-"
+python -c "import csv; f=open('audit_test_materials.csv', encoding='utf-8'); r=csv.DictReader(f); cols=r.fieldnames; req=['material_name','total_quantity','total_locked','total_available','batch_count','request_count','log_count','operation_count']; assert all(c in cols for c in req), 'CSV字段缺失'; print('[OK] CSV 字段结构完整')"
 ```
 
 #### 3. 导入冲突后审计检测
-```bash
+```powershell
+$env:PYTHONIOENCODING="utf-8"
+
 # 第一步：创建数据并导出
-python cli.py cb --batch-no B-CONFLICT --material 冲突测试物资 --quantity 50 \
-  --expiry 2026-12-31 --location A仓 --operator warehouse_keeper
-python cli.py cr --request-no R-CONFLICT --material 冲突测试物资 --quantity 10 \
-  --location 安置点 --operator applicant
+python cli.py cb --batch-no B-CONFLICT --material 冲突测试物资 --quantity 50 --expiry 2026-12-31 --location A仓 --operator warehouse_keeper
+python cli.py cr --request-no R-CONFLICT --material 冲突测试物资 --quantity 10 --location 安置点 --operator applicant
 python cli.py export --output ./conflict_export.json --format json
 
 # 第二步：清理后重建数据（制造导入冲突场景）
 # 删除 data 目录后重新创建相同批次/申请
-python cli.py cb --batch-no B-CONFLICT --material 冲突测试物资 --quantity 50 \
-  --expiry 2026-12-31 --location A仓 --operator warehouse_keeper
-python cli.py cr --request-no R-CONFLICT --material 冲突测试物资 --quantity 10 \
-  --location 安置点 --operator applicant
+Remove-Item -Recurse -Force data
+python cli.py cb --batch-no B-CONFLICT --material 冲突测试物资 --quantity 50 --expiry 2026-12-31 --location A仓 --operator warehouse_keeper
+python cli.py cr --request-no R-CONFLICT --material 冲突测试物资 --quantity 10 --location 安置点 --operator applicant
 
 # 第三步：移除 UNIQUE 约束后导入（模拟导入冲突）
-python -c "
-import sqlite3, json
-conn = sqlite3.connect('data/emergency_supply.db')
-c = conn.cursor()
-c.executescript('''
-    PRAGMA foreign_keys=OFF;
-    CREATE TABLE material_batches_new AS SELECT * FROM material_batches WHERE 1=0;
-    INSERT INTO material_batches_new SELECT * FROM material_batches;
-    DROP TABLE material_batches;
-    ALTER TABLE material_batches_new RENAME TO material_batches;
-    CREATE TABLE allocation_requests_new AS SELECT * FROM allocation_requests WHERE 1=0;
-    INSERT INTO allocation_requests_new SELECT * FROM allocation_requests;
-    DROP TABLE allocation_requests;
-    ALTER TABLE allocation_requests_new RENAME TO allocation_requests;
-    PRAGMA foreign_keys=ON;
-''')
-conn.commit(); conn.close()
-"
+python -c "import sqlite3; conn=sqlite3.connect('data/emergency_supply.db'); c=conn.cursor(); c.executescript('PRAGMA foreign_keys=OFF; CREATE TABLE material_batches_new AS SELECT * FROM material_batches WHERE 1=0; INSERT INTO material_batches_new SELECT * FROM material_batches; DROP TABLE material_batches; ALTER TABLE material_batches_new RENAME TO material_batches; CREATE TABLE allocation_requests_new AS SELECT * FROM allocation_requests WHERE 1=0; INSERT INTO allocation_requests_new SELECT * FROM allocation_requests; DROP TABLE allocation_requests; ALTER TABLE allocation_requests_new RENAME TO allocation_requests; PRAGMA foreign_keys=ON;'); conn.commit(); conn.close(); print('[OK] 已移除 UNIQUE 约束')"
+
 python cli.py import --input ./conflict_export.json --format json
 
 # 第四步：审计检测（预期退出码 5，报告批次/申请号冲突）
 python cli.py as --operator supervisor
-echo "退出码: $?  # 预期为 5"
+echo "退出码: $LASTEXITCODE  # 预期为 5"
 ```
 
 #### 4. 权限越权验证
-```bash
+```powershell
+$env:PYTHONIOENCODING="utf-8"
+
 # 申请人尝试查看详情（预期失败，退出码 2）
 python cli.py as --operator applicant --show-details
-echo "退出码: $?  # 预期为 2"
+echo "退出码: $LASTEXITCODE  # 预期为 2"
 
 # 申请人导出（脱敏数据）
 python cli.py as --operator applicant --format json --output ./applicant_audit.json
-python -c "
-import json
-with open('applicant_audit.json') as f: d = json.load(f)
-assert '***' in json.dumps(d), '脱敏标记不存在'
-if d['materials'] and d['materials'][0]['batches']:
-    assert d['materials'][0]['batches'][0]['location'] == '***', '位置未脱敏'
-print('✓ 申请人数据已脱敏')
-"
+python -c "import json; d=json.load(open('applicant_audit.json', encoding='utf-8')); assert '***' in json.dumps(d), '脱敏标记不存在'; b=d['materials'][0]['batches'] if d['materials'] else []; assert (not b) or b[0]['location']=='***', '位置未脱敏'; print('[OK] 申请人数据已脱敏')"
 
 # 无效角色（预期失败，退出码 2）
 python cli.py as --operator invalid_role
-echo "退出码: $?  # 预期为 2"
+echo "退出码: $LASTEXITCODE  # 预期为 2"
+```
+
+#### 5. 跨批次审批无异常验证
+```powershell
+$env:PYTHONIOENCODING="utf-8"
+
+# 两个批次满足一张申请（5件 + 5件，申请8件 = 5+3跨批次）
+python cli.py cb --batch-no B-MULTI-001 --material 跨批次物资 --quantity 5 --expiry 2026-12-31 --location A仓 --operator warehouse_keeper
+python cli.py cb --batch-no B-MULTI-002 --material 跨批次物资 --quantity 5 --expiry 2026-12-31 --location B仓 --operator warehouse_keeper
+python cli.py cr --request-no R-MULTI-001 --material 跨批次物资 --quantity 8 --location 安置点1 --operator applicant
+python cli.py approve --request-id 1 --operator supervisor
+
+# 审计快照（预期退出码 0，无异常）
+python cli.py as --operator supervisor
+echo "退出码: $LASTEXITCODE  # 预期为 0"
+
+# 验证日志数量（跨批次审批产生2条锁定日志）
+python cli.py as --operator supervisor --show-details | Select-String "日志数"
+# 预期输出: R-MULTI-001         8 approved              0 applicant         2
 ```
 
 ### 审计快照数据模型

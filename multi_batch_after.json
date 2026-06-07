@@ -1,0 +1,70 @@
+{
+  "snapshot_at": "2026-06-07 21:45:40",
+  "operator": "supervisor",
+  "operator_role": "supervisor",
+  "filters": {
+    "material_name": null,
+    "start_time": null,
+    "end_time": null
+  },
+  "summary": {
+    "total_materials": 1,
+    "total_batches": 2,
+    "total_requests": 1,
+    "total_quantity": 10,
+    "total_locked": 8,
+    "total_available": 2,
+    "total_logs": 2,
+    "total_operations": 4,
+    "total_anomalies": 0,
+    "critical_anomalies": 0,
+    "warning_anomalies": 0
+  },
+  "materials": [
+    {
+      "material_name": "跨批次物资",
+      "total_quantity": 10,
+      "total_locked": 8,
+      "total_available": 2,
+      "log_count": 2,
+      "operation_count": 4,
+      "batches": [
+        {
+          "batch_id": 1,
+          "batch_no": "B-MULTI-001",
+          "quantity": 5,
+          "locked_quantity": 5,
+          "available_quantity": 0,
+          "expiry_date": "2026-12-31",
+          "location": "A仓",
+          "created_at": "2026-06-07 21:45:37",
+          "is_expired": false
+        },
+        {
+          "batch_id": 2,
+          "batch_no": "B-MULTI-002",
+          "quantity": 5,
+          "locked_quantity": 3,
+          "available_quantity": 2,
+          "expiry_date": "2026-12-31",
+          "location": "B仓",
+          "created_at": "2026-06-07 21:45:37",
+          "is_expired": false
+        }
+      ],
+      "requests": [
+        {
+          "request_id": 1,
+          "request_no": "R-MULTI-001",
+          "quantity": 8,
+          "status": "approved",
+          "returned_quantity": 0,
+          "created_at": "2026-06-07 21:45:37",
+          "applicant": "applicant",
+          "log_count": 2
+        }
+      ]
+    }
+  ],
+  "anomalies": []
+}
