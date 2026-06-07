@@ -1,11 +1,13 @@
 import json
 import csv
+from dataclasses import asdict
 from pathlib import Path
 from datetime import datetime
 from typing import List, Dict, Any
 
 from .database import Database
 from .rules import BusinessException
+from .models import AuditSnapshot
 
 
 class DataIO:
@@ -213,3 +215,128 @@ class DataIO:
                     continue
 
         return counts
+
+    def export_audit_snapshot(
+        self, snapshot: AuditSnapshot, output_path: str, format_type: str = "json"
+    ) -> str:
+        format_type = format_type.lower()
+        if format_type not in ["json", "csv"]:
+            raise BusinessException(f"不支持的导出格式：{format_type}，请使用 json 或 csv。")
+
+        snapshot_dict = self._snapshot_to_dict(snapshot)
+
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        if format_type == "json":
+            if not output_path.suffix:
+                output_path = output_path.with_suffix(".json")
+            with open(output_path, "w", encoding="utf-8") as f:
+                json.dump(snapshot_dict, f, ensure_ascii=False, indent=2)
+        else:
+            if not output_path.suffix:
+                output_path = output_path.with_suffix("")
+            self._export_snapshot_to_csv(snapshot_dict, output_path)
+
+        return str(output_path)
+
+    def _snapshot_to_dict(self, snapshot: AuditSnapshot) -> Dict[str, Any]:
+        return {
+            "snapshot_at": snapshot.snapshot_at,
+            "operator": snapshot.operator,
+            "operator_role": snapshot.operator_role,
+            "filters": snapshot.filters,
+            "summary": snapshot.summary,
+            "materials": [
+                {
+                    "material_name": m.material_name,
+                    "total_quantity": m.total_quantity,
+                    "total_locked": m.total_locked,
+                    "total_available": m.total_available,
+                    "log_count": m.log_count,
+                    "operation_count": m.operation_count,
+                    "batches": [asdict(b) for b in m.batches],
+                    "requests": [asdict(r) for r in m.requests],
+                }
+                for m in snapshot.materials
+            ],
+            "anomalies": [asdict(a) for a in snapshot.anomalies],
+        }
+
+    def _export_snapshot_to_csv(
+        self, snapshot_dict: Dict[str, Any], base_path: Path
+    ) -> None:
+        base_name = base_path.stem if base_path.suffix else base_path.name
+
+        with open(f"{base_path}_summary.csv", "w", encoding="utf-8-sig", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["项目", "数值"])
+            for key, value in snapshot_dict["summary"].items():
+                writer.writerow([key, value])
+            writer.writerow(["snapshot_at", snapshot_dict["snapshot_at"]])
+            writer.writerow(["operator", snapshot_dict["operator"]])
+            writer.writerow(["operator_role", snapshot_dict["operator_role"]])
+            writer.writerow(["filter_material", snapshot_dict["filters"]["material_name"]])
+            writer.writerow(["filter_start_time", snapshot_dict["filters"]["start_time"]])
+            writer.writerow(["filter_end_time", snapshot_dict["filters"]["end_time"]])
+
+        if snapshot_dict["materials"]:
+            material_fieldnames = [
+                "material_name", "total_quantity", "total_locked",
+                "total_available", "batch_count", "request_count",
+                "log_count", "operation_count"
+            ]
+            with open(f"{base_path}_materials.csv", "w", encoding="utf-8-sig", newline="") as f:
+                writer = csv.DictWriter(f, fieldnames=material_fieldnames)
+                writer.writeheader()
+                for m in snapshot_dict["materials"]:
+                    writer.writerow({
+                        "material_name": m["material_name"],
+                        "total_quantity": m["total_quantity"],
+                        "total_locked": m["total_locked"],
+                        "total_available": m["total_available"],
+                        "batch_count": len(m["batches"]),
+                        "request_count": len(m["requests"]),
+                        "log_count": m["log_count"],
+                        "operation_count": m["operation_count"],
+                    })
+
+            batch_fieldnames = [
+                "material_name", "batch_id", "batch_no", "quantity",
+                "locked_quantity", "available_quantity",
+                "expiry_date", "location", "created_at", "is_expired"
+            ]
+            with open(f"{base_path}_batches.csv", "w", encoding="utf-8-sig", newline="") as f:
+                writer = csv.DictWriter(f, fieldnames=batch_fieldnames)
+                writer.writeheader()
+                for m in snapshot_dict["materials"]:
+                    for b in m["batches"]:
+                        row = dict(b)
+                        row["material_name"] = m["material_name"]
+                        writer.writerow(row)
+
+            request_fieldnames = [
+                "material_name", "request_id", "request_no", "quantity",
+                "status", "returned_quantity", "created_at", "applicant", "log_count"
+            ]
+            with open(f"{base_path}_requests.csv", "w", encoding="utf-8-sig", newline="") as f:
+                writer = csv.DictWriter(f, fieldnames=request_fieldnames)
+                writer.writeheader()
+                for m in snapshot_dict["materials"]:
+                    for r in m["requests"]:
+                        row = dict(r)
+                        row["material_name"] = m["material_name"]
+                        writer.writerow(row)
+
+        if snapshot_dict["anomalies"]:
+            anomaly_fieldnames = [
+                "anomaly_type", "severity", "material_name",
+                "entity_id", "entity_no", "message", "details"
+            ]
+            with open(f"{base_path}_anomalies.csv", "w", encoding="utf-8-sig", newline="") as f:
+                writer = csv.DictWriter(f, fieldnames=anomaly_fieldnames)
+                writer.writeheader()
+                for a in snapshot_dict["anomalies"]:
+                    row = dict(a)
+                    row["details"] = json.dumps(a["details"], ensure_ascii=False)
+                    writer.writerow(row)

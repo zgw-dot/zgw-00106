@@ -26,6 +26,8 @@
 | 撤销更正 | ❌ | ❌ | ✅ |
 | 查询库存/日志 | ✅ | ✅ | ✅ |
 | 导入导出 | ✅ | ✅ | ✅ |
+| 库存审计快照(完整) | ✅ | ❌ | ✅ |
+| 库存审计快照(脱敏) | ❌ | ✅ | ❌ |
 
 ### 状态流转
 ```
@@ -90,6 +92,7 @@ python cli.py create-batch --help
 |------|------|------|
 | `inventory-logs` | `il` | 查询库存变化日志 |
 | `operation-history` | `oh` | 查询操作历史 |
+| `audit-snapshot` | `as` | 库存审计快照（演练/灾后复盘） |
 
 ### 数据导入导出
 | 命令 | 说明 |
@@ -175,6 +178,47 @@ python cli.py export --output ./data/export --format csv
 # 导入 JSON 数据
 python cli.py import --input ./data/export.json --format json
 ```
+
+### 11. 库存审计快照（演练/灾后复盘）
+```bash
+# 主管查看完整审计快照（默认摘要）
+python cli.py audit-snapshot --operator supervisor
+
+# 按物资名称筛选审计
+python cli.py audit-snapshot --operator supervisor --material 矿泉水
+
+# 按时间范围筛选审计
+python cli.py audit-snapshot --operator supervisor --start-time "2025-01-01 00:00:00" --end-time "2025-12-31 23:59:59"
+
+# 显示详细信息（批次、申请明细）
+python cli.py audit-snapshot --operator supervisor --show-details
+
+# 导出为 JSON（完整数据，仓管/主管可用）
+python cli.py audit-snapshot --operator supervisor --format json --output ./audit/snapshot.json
+
+# 导出为 CSV（生成多个CSV文件）
+python cli.py audit-snapshot --operator warehouse_keeper --format csv --output ./audit/snapshot
+
+# 申请人查看脱敏摘要
+python cli.py audit-snapshot --operator applicant
+
+# 申请人导出脱敏数据
+python cli.py audit-snapshot --operator applicant --format json --output ./audit/applicant_snapshot.json
+
+# 使用别名
+python cli.py as --operator supervisor --show-details
+```
+
+### 12. 审计异常说明
+审计快照会自动检测以下异常，发现异常时退出码为 5：
+
+| 异常类型 | 说明 |
+|---------|------|
+| 负库存 | 批次库存数量为负数 |
+| 锁定数大于库存 | 批次锁定数量超过实际库存 |
+| 申请状态与日志不一致 | 申请状态与对应库存日志数量不匹配 |
+| 批次号冲突 | 数据库中存在重复的批次号 |
+| 申请号冲突 | 数据库中存在重复的申请号 |
 
 ## 非法场景测试
 
@@ -393,6 +437,7 @@ python test_revert_fix.py
 | 2 | 权限错误（角色无权操作） |
 | 3 | 状态错误（当前状态不允许该操作） |
 | 4 | 库存错误（库存不足、超量归还等） |
+| 5 | 审计异常（库存审计快照检测到异常） |
 | 99 | 系统错误 |
 
 ## 数据一致性保证
@@ -402,3 +447,171 @@ python test_revert_fix.py
 3. **事务原子性**：所有涉及多表更新的操作（审批、出库、归还等）均在事务内执行，失败自动回滚
 4. **历史不可篡改**：所有操作均追加记录，不更新或删除历史日志
 5. **撤销更正库存正确性**：撤销时仅恢复**净出库量**（申请总数量 - 已归还数量），避免重复加回已归还部分；仅 `APPROVED` 状态才解锁锁定库存（出库后 `locked_quantity` 已通过出库操作扣减）
+
+## 库存审计快照验证说明
+
+### 一键运行验证
+```bash
+# 运行完整审计快照验证测试套件
+python test_audit_snapshot.py
+```
+
+### 手动验证步骤
+
+#### 1. 跨重启后快照一致性
+```bash
+# 第一步：创建测试数据并导出快照
+python cli.py cb --batch-no B-AUDIT-001 --material 审计物资 --quantity 100 \
+  --expiry 2026-12-31 --location 审计仓 --operator warehouse_keeper
+python cli.py cr --request-no R-AUDIT-001 --material 审计物资 --quantity 30 \
+  --location 安置点 --operator applicant
+python cli.py approve --request-id 1 --operator supervisor
+python cli.py as --operator supervisor --format json --output ./audit_before.json
+
+# 第二步：重启后再次导出（重新运行 CLI 即为模拟重启）
+python cli.py as --operator supervisor --format json --output ./audit_after.json
+
+# 第三步：比较数据一致性（排除快照时间字段）
+python -c "
+import json
+with open('audit_before.json') as f: d1 = json.load(f)
+with open('audit_after.json') as f: d2 = json.load(f)
+d1.pop('snapshot_at'); d2.pop('snapshot_at')
+assert d1 == d2, '跨重启快照不一致'
+print('✓ 跨重启后快照数据一致')
+"
+```
+
+#### 2. JSON/CSV 字段稳定性验证
+```bash
+# 导出 JSON 并验证字段
+python cli.py as --operator supervisor --format json --output ./audit_test.json
+python -c "
+import json
+with open('audit_test.json') as f: d = json.load(f)
+required_top = ['snapshot_at','operator','operator_role','filters','summary','materials','anomalies']
+required_summary = ['total_materials','total_batches','total_requests','total_quantity','total_locked','total_available','total_logs','total_operations','total_anomalies','critical_anomalies','warning_anomalies']
+assert all(k in d for k in required_top), '顶层字段缺失'
+assert all(k in d['summary'] for k in required_summary), '汇总字段缺失'
+print('✓ JSON 字段结构完整')
+"
+
+# 导出 CSV 并验证字段
+python cli.py as --operator supervisor --format csv --output ./audit_test
+python -c "
+import csv
+with open('audit_test_materials.csv') as f:
+    reader = csv.DictReader(f)
+    cols = reader.fieldnames
+required = ['material_name','total_quantity','total_locked','total_available','batch_count','request_count','log_count','operation_count']
+assert all(c in cols for c in required), 'CSV字段缺失'
+print('✓ CSV 字段结构完整')
+"
+```
+
+#### 3. 导入冲突后审计检测
+```bash
+# 第一步：创建数据并导出
+python cli.py cb --batch-no B-CONFLICT --material 冲突测试物资 --quantity 50 \
+  --expiry 2026-12-31 --location A仓 --operator warehouse_keeper
+python cli.py cr --request-no R-CONFLICT --material 冲突测试物资 --quantity 10 \
+  --location 安置点 --operator applicant
+python cli.py export --output ./conflict_export.json --format json
+
+# 第二步：清理后重建数据（制造导入冲突场景）
+# 删除 data 目录后重新创建相同批次/申请
+python cli.py cb --batch-no B-CONFLICT --material 冲突测试物资 --quantity 50 \
+  --expiry 2026-12-31 --location A仓 --operator warehouse_keeper
+python cli.py cr --request-no R-CONFLICT --material 冲突测试物资 --quantity 10 \
+  --location 安置点 --operator applicant
+
+# 第三步：移除 UNIQUE 约束后导入（模拟导入冲突）
+python -c "
+import sqlite3, json
+conn = sqlite3.connect('data/emergency_supply.db')
+c = conn.cursor()
+c.executescript('''
+    PRAGMA foreign_keys=OFF;
+    CREATE TABLE material_batches_new AS SELECT * FROM material_batches WHERE 1=0;
+    INSERT INTO material_batches_new SELECT * FROM material_batches;
+    DROP TABLE material_batches;
+    ALTER TABLE material_batches_new RENAME TO material_batches;
+    CREATE TABLE allocation_requests_new AS SELECT * FROM allocation_requests WHERE 1=0;
+    INSERT INTO allocation_requests_new SELECT * FROM allocation_requests;
+    DROP TABLE allocation_requests;
+    ALTER TABLE allocation_requests_new RENAME TO allocation_requests;
+    PRAGMA foreign_keys=ON;
+''')
+conn.commit(); conn.close()
+"
+python cli.py import --input ./conflict_export.json --format json
+
+# 第四步：审计检测（预期退出码 5，报告批次/申请号冲突）
+python cli.py as --operator supervisor
+echo "退出码: $?  # 预期为 5"
+```
+
+#### 4. 权限越权验证
+```bash
+# 申请人尝试查看详情（预期失败，退出码 2）
+python cli.py as --operator applicant --show-details
+echo "退出码: $?  # 预期为 2"
+
+# 申请人导出（脱敏数据）
+python cli.py as --operator applicant --format json --output ./applicant_audit.json
+python -c "
+import json
+with open('applicant_audit.json') as f: d = json.load(f)
+assert '***' in json.dumps(d), '脱敏标记不存在'
+if d['materials'] and d['materials'][0]['batches']:
+    assert d['materials'][0]['batches'][0]['location'] == '***', '位置未脱敏'
+print('✓ 申请人数据已脱敏')
+"
+
+# 无效角色（预期失败，退出码 2）
+python cli.py as --operator invalid_role
+echo "退出码: $?  # 预期为 2"
+```
+
+### 审计快照数据模型
+
+#### AuditSnapshot（审计快照）
+```
+snapshot_at: 快照时间
+operator: 操作人
+operator_role: 操作人角色
+filters: 筛选条件 {material_name, start_time, end_time}
+summary: 汇总统计 {
+  total_materials, total_batches, total_requests,
+  total_quantity, total_locked, total_available,
+  total_logs, total_operations,
+  total_anomalies, critical_anomalies, warning_anomalies
+}
+materials: [
+  {
+    material_name, total_quantity, total_locked, total_available,
+    batches: [BatchSummary],
+    requests: [RequestSummary],
+    log_count, operation_count
+  }
+]
+anomalies: [AuditAnomaly]
+```
+
+#### BatchSummary（批次摘要）
+```
+batch_id, batch_no, quantity, locked_quantity, available_quantity,
+expiry_date, location, created_at, is_expired
+```
+
+#### RequestSummary（申请摘要）
+```
+request_id, request_no, quantity, status, returned_quantity,
+created_at, applicant, log_count
+```
+
+#### AuditAnomaly（审计异常）
+```
+anomaly_type, severity (critical/warning),
+material_name, entity_id, entity_no, message, details
+```

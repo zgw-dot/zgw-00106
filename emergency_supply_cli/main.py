@@ -12,7 +12,7 @@ from .rules import (
     InventoryException,
 )
 from .io import DataIO
-from .models import MaterialBatch, AllocationRequest, InventoryLog, OperationHistory
+from .models import MaterialBatch, AllocationRequest, InventoryLog, OperationHistory, AuditSnapshot
 
 
 class CLI:
@@ -71,6 +71,7 @@ class CLI:
         self._add_request_commands(subparsers)
         self._add_query_commands(subparsers)
         self._add_io_commands(subparsers)
+        self._add_audit_commands(subparsers)
 
         return parser
 
@@ -194,6 +195,22 @@ class CLI:
             "--format", default="json", choices=["json", "csv"], help="导入格式"
         )
         import_parser.set_defaults(func=self._cmd_import)
+
+    def _add_audit_commands(self, subparsers):
+        audit_parser = subparsers.add_parser(
+            "audit-snapshot", help="库存审计快照（仓管/主管可导出完整，申请人仅脱敏摘要）", aliases=["as"]
+        )
+        audit_parser.add_argument("--material", help="按物资名称筛选")
+        audit_parser.add_argument("--start-time", help="开始时间 (YYYY-MM-DD HH:MM:SS)")
+        audit_parser.add_argument("--end-time", help="结束时间 (YYYY-MM-DD HH:MM:SS)")
+        audit_parser.add_argument("--operator", required=True, help="操作人角色")
+        audit_parser.add_argument(
+            "--format", default="summary", choices=["summary", "json", "csv"],
+            help="输出格式：summary（默认摘要）、json、csv"
+        )
+        audit_parser.add_argument("--output", help="导出文件路径（json/csv 格式时必需）")
+        audit_parser.add_argument("--show-details", action="store_true", help="显示详细信息（仓管/主管可用）")
+        audit_parser.set_defaults(func=self._cmd_audit_snapshot)
 
     def _print_batches(self, batches: List[MaterialBatch]):
         if not batches:
@@ -365,6 +382,126 @@ class CLI:
         print(f"  调拨申请：{counts['requests']} 条")
         print(f"  库存日志：{counts['logs']} 条")
         print(f"  操作历史：{counts['histories']} 条")
+
+    def _cmd_audit_snapshot(self, args):
+        if args.format in ["json", "csv"] and not args.output:
+            raise BusinessException(f"导出 {args.format} 格式时必须指定 --output 参数")
+
+        if args.show_details and args.operator == ROLES["APPLICANT"]:
+            raise PermissionException(
+                "权限不足：申请人角色无法查看详细信息，仅仓管和主管可查看。"
+            )
+
+        snapshot = self.rules.generate_audit_snapshot(
+            operator=args.operator,
+            material_name=args.material,
+            start_time=args.start_time,
+            end_time=args.end_time,
+        )
+
+        if args.format == "summary":
+            self._print_audit_snapshot(snapshot, show_details=args.show_details)
+        elif args.format == "json":
+            output_path = self.io.export_audit_snapshot(snapshot, args.output, "json")
+            print(f"[成功] 审计快照已导出到：{output_path}")
+        elif args.format == "csv":
+            output_path = self.io.export_audit_snapshot(snapshot, args.output, "csv")
+            print(f"[成功] 审计快照已导出到：{output_path}")
+            print(f"CSV 格式已生成以下文件：")
+            base_path = output_path.rsplit(".", 1)[0] if "." in output_path else output_path
+            print(f"  - {base_path}_summary.csv")
+            if snapshot.materials:
+                print(f"  - {base_path}_materials.csv")
+                print(f"  - {base_path}_batches.csv")
+                print(f"  - {base_path}_requests.csv")
+            if snapshot.anomalies:
+                print(f"  - {base_path}_anomalies.csv")
+
+        if snapshot.anomalies:
+            critical_count = len([a for a in snapshot.anomalies if a.severity == "critical"])
+            warning_count = len([a for a in snapshot.anomalies if a.severity == "warning"])
+            print(f"\n[警告] 检测到 {len(snapshot.anomalies)} 个异常："
+                  f"{critical_count} 个严重，{warning_count} 个警告", file=sys.stderr)
+            sys.exit(5)
+
+    def _print_audit_snapshot(self, snapshot: AuditSnapshot, show_details: bool = False):
+        print("=" * 80)
+        print(f"库存审计快照 - {snapshot.snapshot_at}")
+        print(f"操作人：{snapshot.operator} (角色：{snapshot.operator_role})")
+        if snapshot.filters["material_name"] or snapshot.filters["start_time"] or snapshot.filters["end_time"]:
+            filter_parts = []
+            if snapshot.filters["material_name"]:
+                filter_parts.append(f"物资={snapshot.filters['material_name']}")
+            if snapshot.filters["start_time"]:
+                filter_parts.append(f"开始={snapshot.filters['start_time']}")
+            if snapshot.filters["end_time"]:
+                filter_parts.append(f"结束={snapshot.filters['end_time']}")
+            print(f"筛选条件：{', '.join(filter_parts)}")
+        print("=" * 80)
+
+        s = snapshot.summary
+        print(f"\n【汇总统计】")
+        print(f"  物资种类：{s['total_materials']} 种")
+        print(f"  物资批次：{s['total_batches']} 批")
+        print(f"  调拨申请：{s['total_requests']} 单")
+        print(f"  库存总量：{s['total_quantity']} 件")
+        print(f"  锁定数量：{s['total_locked']} 件")
+        print(f"  可用数量：{s['total_available']} 件")
+        print(f"  库存日志：{s['total_logs']} 条")
+        print(f"  操作历史：{s['total_operations']} 条")
+
+        if s["total_anomalies"] > 0:
+            print(f"\n【异常检测】发现 {s['total_anomalies']} 个异常："
+                  f"{s['critical_anomalies']} 个严重，{s['warning_anomalies']} 个警告")
+            for i, anomaly in enumerate(snapshot.anomalies, 1):
+                severity_tag = "[严重]" if anomaly.severity == "critical" else "[警告]"
+                material_info = f" [{anomaly.material_name}]" if anomaly.material_name else ""
+                entity_info = f" ({anomaly.entity_no})" if anomaly.entity_no else ""
+                print(f"  {i}. {severity_tag}{material_info}{entity_info} {anomaly.message}")
+
+        print(f"\n【物资明细汇总】")
+        header = f"{'物资名称':<14} {'总数量':>10} {'锁定':>8} {'可用':>8} {'批次':>6} {'申请':>6} {'日志':>6} {'操作':>6}"
+        print(header)
+        print("-" * len(header))
+        for m in snapshot.materials:
+            print(
+                f"{m.material_name:<14} {m.total_quantity:>10} {m.total_locked:>8} "
+                f"{m.total_available:>8} {len(m.batches):>6} {len(m.requests):>6} "
+                f"{m.log_count:>6} {m.operation_count:>6}"
+            )
+
+        if show_details:
+            for m in snapshot.materials:
+                if m.batches:
+                    print(f"\n【{m.material_name} - 批次明细】")
+                    batch_header = f"{'批次号':<12} {'数量':>8} {'锁定':>6} {'可用':>6} {'保质期':<12} {'位置':<12} {'过期':<6}"
+                    print(batch_header)
+                    print("-" * len(batch_header))
+                    for b in m.batches:
+                        expired_flag = "是" if b.is_expired else "否"
+                        print(
+                            f"{b.batch_no:<12} {b.quantity:>8} {b.locked_quantity:>6} "
+                            f"{b.available_quantity:>6} {b.expiry_date:<12} "
+                            f"{b.location:<12} {expired_flag:<6}"
+                        )
+
+                if m.requests:
+                    print(f"\n【{m.material_name} - 申请明细】")
+                    req_header = f"{'申请单号':<12} {'数量':>8} {'状态':<14} {'已归还':>8} {'申请人':<10} {'日志数':>8}"
+                    print(req_header)
+                    print("-" * len(req_header))
+                    for r in m.requests:
+                        print(
+                            f"{r.request_no:<12} {r.quantity:>8} {r.status:<14} "
+                            f"{r.returned_quantity:>8} {r.applicant:<10} {r.log_count:>8}"
+                        )
+
+        print("\n" + "=" * 80)
+        if snapshot.anomalies:
+            print(f"审计完成，存在异常（退出码 5）")
+        else:
+            print("审计完成，无异常")
+        print("=" * 80)
 
 
 def main():

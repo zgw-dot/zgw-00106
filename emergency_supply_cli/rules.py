@@ -1,10 +1,18 @@
 from datetime import datetime
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Dict, Any
 import sqlite3
 
 from .config import ROLES, STATUS, OPERATION_TYPES
 from .database import Database
-from .models import MaterialBatch, AllocationRequest
+from .models import (
+    MaterialBatch,
+    AllocationRequest,
+    AuditSnapshot,
+    MaterialAudit,
+    BatchSummary,
+    RequestSummary,
+    AuditAnomaly,
+)
 
 
 class BusinessException(Exception):
@@ -676,3 +684,349 @@ class BusinessRules:
             )
 
         return request
+
+    def generate_audit_snapshot(
+        self,
+        operator: str,
+        material_name: str = None,
+        start_time: str = None,
+        end_time: str = None,
+    ) -> AuditSnapshot:
+        self._check_audit_permission(operator)
+
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        batches = self.db.list_batches_for_audit(material_name, start_time, end_time)
+        requests = self.db.list_requests_for_audit(material_name, start_time, end_time)
+        logs = self.db.list_logs_for_audit(material_name, start_time, end_time)
+        histories = self.db.list_histories_for_audit(material_name, start_time, end_time)
+
+        material_map: Dict[str, MaterialAudit] = {}
+
+        for batch in batches:
+            if batch.material_name not in material_map:
+                material_map[batch.material_name] = MaterialAudit(
+                    material_name=batch.material_name,
+                    total_quantity=0,
+                    total_locked=0,
+                    total_available=0,
+                    batches=[],
+                    requests=[],
+                    log_count=0,
+                    operation_count=0,
+                )
+            ma = material_map[batch.material_name]
+            ma.total_quantity += batch.quantity
+            ma.total_locked += batch.locked_quantity
+            ma.total_available += batch.available_quantity
+            ma.batches.append(
+                BatchSummary(
+                    batch_id=batch.id,
+                    batch_no=batch.batch_no,
+                    quantity=batch.quantity,
+                    locked_quantity=batch.locked_quantity,
+                    available_quantity=batch.available_quantity,
+                    expiry_date=batch.expiry_date,
+                    location=batch.location,
+                    created_at=batch.created_at,
+                    is_expired=batch.is_expired,
+                )
+            )
+
+        batch_ids_by_material: Dict[str, List[int]] = {}
+        for batch in batches:
+            if batch.material_name not in batch_ids_by_material:
+                batch_ids_by_material[batch.material_name] = []
+            batch_ids_by_material[batch.material_name].append(batch.id)
+
+        for req in requests:
+            if req.material_name not in material_map:
+                material_map[req.material_name] = MaterialAudit(
+                    material_name=req.material_name,
+                    total_quantity=0,
+                    total_locked=0,
+                    total_available=0,
+                    batches=[],
+                    requests=[],
+                    log_count=0,
+                    operation_count=0,
+                )
+            ma = material_map[req.material_name]
+            log_count = self.db.get_log_count_by_request(req.id)
+            ma.requests.append(
+                RequestSummary(
+                    request_id=req.id,
+                    request_no=req.request_no,
+                    quantity=req.quantity,
+                    status=req.status,
+                    returned_quantity=req.returned_quantity,
+                    created_at=req.created_at,
+                    applicant=req.applicant,
+                    log_count=log_count,
+                )
+            )
+
+        for log in logs:
+            for mat_name, batch_ids in batch_ids_by_material.items():
+                if log.batch_id in batch_ids:
+                    material_map[mat_name].log_count += 1
+                    break
+
+        for hist in histories:
+            matched = False
+            if hist.batch_id:
+                for mat_name, batch_ids in batch_ids_by_material.items():
+                    if hist.batch_id in batch_ids:
+                        material_map[mat_name].operation_count += 1
+                        matched = True
+                        break
+            if not matched and hist.request_id:
+                for ma in material_map.values():
+                    for req in ma.requests:
+                        if req.request_id == hist.request_id:
+                            ma.operation_count += 1
+                            matched = True
+                            break
+                    if matched:
+                        break
+
+        materials = list(material_map.values())
+        anomalies = self._detect_anomalies(batches, requests, logs, histories)
+
+        summary = {
+            "total_materials": len(materials),
+            "total_batches": sum(len(m.batches) for m in materials),
+            "total_requests": sum(len(m.requests) for m in materials),
+            "total_quantity": sum(m.total_quantity for m in materials),
+            "total_locked": sum(m.total_locked for m in materials),
+            "total_available": sum(m.total_available for m in materials),
+            "total_logs": sum(m.log_count for m in materials),
+            "total_operations": sum(m.operation_count for m in materials),
+            "total_anomalies": len(anomalies),
+            "critical_anomalies": len([a for a in anomalies if a.severity == "critical"]),
+            "warning_anomalies": len([a for a in anomalies if a.severity == "warning"]),
+        }
+
+        snapshot = AuditSnapshot(
+            snapshot_at=now,
+            operator=operator,
+            operator_role=operator,
+            filters={
+                "material_name": material_name,
+                "start_time": start_time,
+                "end_time": end_time,
+            },
+            materials=materials,
+            anomalies=anomalies,
+            summary=summary,
+        )
+
+        if operator == ROLES["APPLICANT"]:
+            snapshot = self._redact_snapshot(snapshot)
+
+        return snapshot
+
+    def _check_audit_permission(self, operator: str) -> None:
+        allowed_roles = [
+            ROLES["WAREHOUSE_KEEPER"],
+            ROLES["APPLICANT"],
+            ROLES["SUPERVISOR"],
+        ]
+        if operator not in allowed_roles:
+            raise PermissionException(
+                f"权限不足：用户 '{operator}' 没有权限执行审计快照。"
+                f"允许的角色：{', '.join(allowed_roles)}"
+            )
+
+    def _detect_anomalies(
+        self,
+        batches: List[MaterialBatch],
+        requests: List[AllocationRequest],
+        logs: List[Any],
+        histories: List[Any],
+    ) -> List[AuditAnomaly]:
+        anomalies: List[AuditAnomaly] = []
+
+        for batch in batches:
+            if batch.quantity < 0:
+                anomalies.append(
+                    AuditAnomaly(
+                        anomaly_type="negative_inventory",
+                        severity="critical",
+                        material_name=batch.material_name,
+                        entity_id=batch.id,
+                        entity_no=batch.batch_no,
+                        message=f"批次库存为负数：{batch.quantity}",
+                        details={
+                            "batch_id": batch.id,
+                            "batch_no": batch.batch_no,
+                            "quantity": batch.quantity,
+                        },
+                    )
+                )
+
+            if batch.locked_quantity > batch.quantity:
+                anomalies.append(
+                    AuditAnomaly(
+                        anomaly_type="locked_exceeds_inventory",
+                        severity="critical",
+                        material_name=batch.material_name,
+                        entity_id=batch.id,
+                        entity_no=batch.batch_no,
+                        message=f"锁定数量({batch.locked_quantity})大于库存数量({batch.quantity})",
+                        details={
+                            "batch_id": batch.id,
+                            "batch_no": batch.batch_no,
+                            "quantity": batch.quantity,
+                            "locked_quantity": batch.locked_quantity,
+                        },
+                    )
+                )
+
+        for req in requests:
+            expected_log_count = 0
+            if req.status == STATUS["APPROVED"]:
+                expected_log_count = 1
+            elif req.status == STATUS["OUTBOUND"]:
+                expected_log_count = 2
+            elif req.status in [STATUS["PARTIAL_RETURN"], STATUS["FULL_SETTLED"]]:
+                expected_log_count = 3
+            elif req.status == STATUS["CANCELLED"] and req.approved_at:
+                expected_log_count = 2
+            elif req.status == STATUS["REVERTED"]:
+                expected_log_count = 4
+
+            actual_log_count = self.db.get_log_count_by_request(req.id)
+
+            if expected_log_count > 0 and actual_log_count != expected_log_count:
+                anomalies.append(
+                    AuditAnomaly(
+                        anomaly_type="status_log_mismatch",
+                        severity="warning",
+                        material_name=req.material_name,
+                        entity_id=req.id,
+                        entity_no=req.request_no,
+                        message=f"申请状态({req.status})与日志数量({actual_log_count})不一致，预期 {expected_log_count} 条",
+                        details={
+                            "request_id": req.id,
+                            "request_no": req.request_no,
+                            "status": req.status,
+                            "expected_logs": expected_log_count,
+                            "actual_logs": actual_log_count,
+                        },
+                    )
+                )
+
+        duplicate_batches = self.db.get_duplicate_batch_numbers()
+        for dup in duplicate_batches:
+            anomalies.append(
+                AuditAnomaly(
+                    anomaly_type="duplicate_batch_no",
+                    severity="critical",
+                    material_name=None,
+                    entity_id=None,
+                    entity_no=dup["batch_no"],
+                    message=f"批次号冲突：{dup['batch_no']} 出现 {dup['count']} 次，ID: {dup['ids']}",
+                    details={
+                        "batch_no": dup["batch_no"],
+                        "count": dup["count"],
+                        "ids": dup["ids"],
+                    },
+                )
+            )
+
+        duplicate_requests = self.db.get_duplicate_request_numbers()
+        for dup in duplicate_requests:
+            anomalies.append(
+                AuditAnomaly(
+                    anomaly_type="duplicate_request_no",
+                    severity="critical",
+                    material_name=None,
+                    entity_id=None,
+                    entity_no=dup["request_no"],
+                    message=f"申请号冲突：{dup['request_no']} 出现 {dup['count']} 次，ID: {dup['ids']}",
+                    details={
+                        "request_no": dup["request_no"],
+                        "count": dup["count"],
+                        "ids": dup["ids"],
+                    },
+                )
+            )
+
+        return anomalies
+
+    def _redact_snapshot(self, snapshot: AuditSnapshot) -> AuditSnapshot:
+        redacted_materials = []
+        for ma in snapshot.materials:
+            redacted_batches = []
+            for batch in ma.batches:
+                redacted_batches.append(
+                    BatchSummary(
+                        batch_id=batch.batch_id,
+                        batch_no=batch.batch_no,
+                        quantity=batch.quantity,
+                        locked_quantity=batch.locked_quantity,
+                        available_quantity=batch.available_quantity,
+                        expiry_date="***",
+                        location="***",
+                        created_at=batch.created_at,
+                        is_expired=batch.is_expired,
+                    )
+                )
+
+            redacted_requests = []
+            for req in ma.requests:
+                redacted_requests.append(
+                    RequestSummary(
+                        request_id=req.request_id,
+                        request_no=req.request_no,
+                        quantity=req.quantity,
+                        status=req.status,
+                        returned_quantity=req.returned_quantity,
+                        created_at=req.created_at,
+                        applicant="***",
+                        log_count=req.log_count,
+                    )
+                )
+
+            redacted_materials.append(
+                MaterialAudit(
+                    material_name=ma.material_name,
+                    total_quantity=ma.total_quantity,
+                    total_locked=ma.total_locked,
+                    total_available=ma.total_available,
+                    batches=redacted_batches,
+                    requests=redacted_requests,
+                    log_count=ma.log_count,
+                    operation_count=ma.operation_count,
+                )
+            )
+
+        redacted_anomalies = []
+        for anomaly in snapshot.anomalies:
+            details = dict(anomaly.details)
+            if "location" in details:
+                details["location"] = "***"
+            if "applicant" in details:
+                details["applicant"] = "***"
+            redacted_anomalies.append(
+                AuditAnomaly(
+                    anomaly_type=anomaly.anomaly_type,
+                    severity=anomaly.severity,
+                    material_name=anomaly.material_name,
+                    entity_id=anomaly.entity_id,
+                    entity_no=anomaly.entity_no,
+                    message=anomaly.message,
+                    details=details,
+                )
+            )
+
+        return AuditSnapshot(
+            snapshot_at=snapshot.snapshot_at,
+            operator=snapshot.operator,
+            operator_role=snapshot.operator_role,
+            filters=snapshot.filters,
+            materials=redacted_materials,
+            anomalies=redacted_anomalies,
+            summary=snapshot.summary,
+        )

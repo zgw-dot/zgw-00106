@@ -479,3 +479,124 @@ class Database:
             c = conn.cursor()
             c.execute("SELECT * FROM operation_histories ORDER BY operated_at DESC")
             return [dict(row) for row in c.fetchall()]
+
+    def list_batches_for_audit(
+        self, material_name: str = None, start_time: str = None, end_time: str = None
+    ) -> List[MaterialBatch]:
+        with self._get_conn() as conn:
+            c = conn.cursor()
+            query = "SELECT * FROM material_batches WHERE is_active = 1"
+            params = []
+            if material_name:
+                query += " AND material_name = ?"
+                params.append(material_name)
+            if start_time:
+                query += " AND created_at >= ?"
+                params.append(start_time)
+            if end_time:
+                query += " AND created_at <= ?"
+                params.append(end_time)
+            query += " ORDER BY material_name, created_at ASC"
+            c.execute(query, params)
+            return [self._row_to_batch(row) for row in c.fetchall()]
+
+    def list_requests_for_audit(
+        self, material_name: str = None, start_time: str = None, end_time: str = None
+    ) -> List[AllocationRequest]:
+        with self._get_conn() as conn:
+            c = conn.cursor()
+            query = "SELECT * FROM allocation_requests WHERE 1=1"
+            params = []
+            if material_name:
+                query += " AND material_name = ?"
+                params.append(material_name)
+            if start_time:
+                query += " AND created_at >= ?"
+                params.append(start_time)
+            if end_time:
+                query += " AND created_at <= ?"
+                params.append(end_time)
+            query += " ORDER BY material_name, created_at ASC"
+            c.execute(query, params)
+            return [self._row_to_request(row) for row in c.fetchall()]
+
+    def list_logs_for_audit(
+        self, material_name: str = None, start_time: str = None, end_time: str = None
+    ) -> List[InventoryLog]:
+        with self._get_conn() as conn:
+            c = conn.cursor()
+            query = """
+                SELECT il.* FROM inventory_logs il
+                JOIN material_batches mb ON il.batch_id = mb.id
+                WHERE 1=1
+            """
+            params = []
+            if material_name:
+                query += " AND mb.material_name = ?"
+                params.append(material_name)
+            if start_time:
+                query += " AND il.operated_at >= ?"
+                params.append(start_time)
+            if end_time:
+                query += " AND il.operated_at <= ?"
+                params.append(end_time)
+            query += " ORDER BY il.operated_at ASC"
+            c.execute(query, params)
+            return [self._row_to_log(row) for row in c.fetchall()]
+
+    def list_histories_for_audit(
+        self, material_name: str = None, start_time: str = None, end_time: str = None
+    ) -> List[OperationHistory]:
+        with self._get_conn() as conn:
+            c = conn.cursor()
+            query = """
+                SELECT oh.* FROM operation_histories oh
+                LEFT JOIN material_batches mb ON oh.batch_id = mb.id
+                LEFT JOIN allocation_requests ar ON oh.request_id = ar.id
+                WHERE 1=1
+            """
+            params = []
+            if material_name:
+                query += " AND (mb.material_name = ? OR ar.material_name = ?)"
+                params.extend([material_name, material_name])
+            if start_time:
+                query += " AND oh.operated_at >= ?"
+                params.append(start_time)
+            if end_time:
+                query += " AND oh.operated_at <= ?"
+                params.append(end_time)
+            query += " ORDER BY oh.operated_at ASC"
+            c.execute(query, params)
+            return [self._row_to_history(row) for row in c.fetchall()]
+
+    def get_duplicate_batch_numbers(self) -> List[dict]:
+        with self._get_conn() as conn:
+            c = conn.cursor()
+            c.execute("""
+                SELECT batch_no, COUNT(*) as count, GROUP_CONCAT(id) as ids
+                FROM material_batches
+                GROUP BY batch_no
+                HAVING COUNT(*) > 1
+            """)
+            return [dict(row) for row in c.fetchall()]
+
+    def get_duplicate_request_numbers(self) -> List[dict]:
+        with self._get_conn() as conn:
+            c = conn.cursor()
+            c.execute("""
+                SELECT request_no, COUNT(*) as count, GROUP_CONCAT(id) as ids
+                FROM allocation_requests
+                GROUP BY request_no
+                HAVING COUNT(*) > 1
+            """)
+            return [dict(row) for row in c.fetchall()]
+
+    def get_log_count_by_request(self, request_id: int) -> int:
+        with self._get_conn() as conn:
+            c = conn.cursor()
+            c.execute(
+                "SELECT COUNT(*) as cnt FROM inventory_logs WHERE request_id = ?",
+                (request_id,),
+            )
+            row = c.fetchone()
+            return row["cnt"] if row else 0

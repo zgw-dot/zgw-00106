@@ -1,0 +1,70 @@
+{
+  "snapshot_at": "2026-06-07 20:45:23",
+  "operator": "applicant",
+  "operator_role": "applicant",
+  "filters": {
+    "material_name": null,
+    "start_time": null,
+    "end_time": null
+  },
+  "summary": {
+    "total_materials": 1,
+    "total_batches": 2,
+    "total_requests": 1,
+    "total_quantity": 150,
+    "total_locked": 30,
+    "total_available": 120,
+    "total_logs": 1,
+    "total_operations": 4,
+    "total_anomalies": 0,
+    "critical_anomalies": 0,
+    "warning_anomalies": 0
+  },
+  "materials": [
+    {
+      "material_name": "矿泉水",
+      "total_quantity": 150,
+      "total_locked": 30,
+      "total_available": 120,
+      "log_count": 1,
+      "operation_count": 4,
+      "batches": [
+        {
+          "batch_id": 1,
+          "batch_no": "TEST-AUDIT-001",
+          "quantity": 100,
+          "locked_quantity": 30,
+          "available_quantity": 70,
+          "expiry_date": "***",
+          "location": "***",
+          "created_at": "2026-06-07 20:43:20",
+          "is_expired": false
+        },
+        {
+          "batch_id": 2,
+          "batch_no": "TEST-AUDIT-002",
+          "quantity": 50,
+          "locked_quantity": 0,
+          "available_quantity": 50,
+          "expiry_date": "***",
+          "location": "***",
+          "created_at": "2026-06-07 20:43:53",
+          "is_expired": false
+        }
+      ],
+      "requests": [
+        {
+          "request_id": 1,
+          "request_no": "TEST-REQ-001",
+          "quantity": 30,
+          "status": "approved",
+          "returned_quantity": 0,
+          "created_at": "2026-06-07 20:43:53",
+          "applicant": "***",
+          "log_count": 1
+        }
+      ]
+    }
+  ],
+  "anomalies": []
+}
